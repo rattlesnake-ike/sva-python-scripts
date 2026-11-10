@@ -3,3 +3,9 @@ src/cache/
 __pycache__/
 *.pyc
 src/board/search_log.txt
+src/board/dismissed.json
+src/board/approved.json
+src/board/board.psd
+src/board/*.jsx
+src/board/attribution.txt
+src/_*.jpg

@@ -455,6 +455,12 @@ def _phash(img, size=8):
 def _hamming(a, b):
     return bin(a ^ b).count("1")
 
+# Two previews are "the same picture" when their 16x16 hashes differ by at
+# most this many of 256 bits. Measured on a "tiger" search: one museum's
+# picture listed by two catalogues differs by 0-2 bits, the closest pair of
+# different pictures by 4.
+PIC_BITS = 2
+
 def classify_image_type(img):
     """Heuristic photo vs illustration classifier from pixels (no model/deps).
     Returns 'photograph', 'illustration', or 'unknown'. Based on edge density,
@@ -675,6 +681,15 @@ class App(tk.Tk):
         self.dismissed_store = load_dismissed()  # {prompt_key: set(ids)} across sessions
         self.approved_store = load_approved()     # {prompt_key: set(ids)} of good retrievals
         self.approved_ids = set()
+        # dismissals also remember the PICTURE, not only the record id: the
+        # same image often sits in two catalogues under two ids
+        self.dismissed_pics = set()
+        for _h in self.dismissed_store.get("__pictures__", ()):
+            try:
+                self.dismissed_pics.add(int(_h, 16))
+            except ValueError:
+                pass
+        self.img_hashes = {}       # id -> picture hash of the shown preview
         self._searching = False
         self.prompt_key = ""       # prompt_key of the current search
         self.approved, self.toreview = [], []
@@ -1498,6 +1513,7 @@ class App(tk.Tk):
         self.img_boxes = {}
         self.img_labels = {}
         self.img_types = {}
+        self.img_hashes = {}
         self._resize_pending = False
         self.gate_brief = dict(self.brief)
         self.result_cards = []
@@ -1646,6 +1662,13 @@ class App(tk.Tk):
         finally:
             self._refill_fetching = False
 
+    def _remember_dismissed(self, item_id):
+        """Record an id as dismissed everywhere (a copy of a dismissed picture)."""
+        self.dismissed.add(item_id)
+        self.dismissed_store.setdefault("__global__", set()).add(item_id)
+        save_dismissed(self.dismissed_store)
+        logline(f"DISMISS-COPY {item_id}")
+
     def dismiss(self, it):
         """✕: drop the card from the grid and refill its slot with the next
         validated result (never a dismissed or already-shown id). The rejection
@@ -1655,6 +1678,11 @@ class App(tk.Tk):
         self.dismissed_store.setdefault(self.prompt_key, set()).add(item_id)
         # learn globally: this id never comes back under any prompt
         self.dismissed_store.setdefault("__global__", set()).add(item_id)
+        # learn the picture itself, so its copy under another id stays away too
+        pic = self.img_hashes.pop(item_id, None)
+        if pic is not None:
+            self.dismissed_pics.add(pic)
+            self.dismissed_store.setdefault("__pictures__", set()).add(format(pic, "x"))
         save_dismissed(self.dismissed_store)
         # drop any cached files for the dismissed image so they don't linger
         _base = (item_id or "img").replace("/", "_")
@@ -1777,6 +1805,19 @@ class App(tk.Tk):
                         _fit_box(Image, im, self.img_boxes.get(_id)))
                     self.photos[_id] = ph
                     self.canvas.itemconfig(label, image=ph)
+                    # the same picture as one dismissed earlier, or as a card
+                    # already on the grid under another id: drop this copy
+                    pic = _phash(im, 16)
+                    if pic is not None:
+                        if any(_hamming(pic, d) <= PIC_BITS for d in self.dismissed_pics):
+                            self._remember_dismissed(_id)
+                            self._hide_card(_id, "same picture as one you dismissed")
+                            continue
+                        if any(k != _id and _hamming(pic, v) <= PIC_BITS
+                               for k, v in self.img_hashes.items()):
+                            self._hide_card(_id, "same picture as another result")
+                            continue
+                        self.img_hashes[_id] = pic
                     # pixel-based type classification + media-toggle enforcement
                     itype = classify_image_type(im)
                     self.img_types[_id] = itype
