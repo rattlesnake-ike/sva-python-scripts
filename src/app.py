@@ -2250,7 +2250,7 @@ class App(tk.Tk):
             psd, jsx = store.export_psd_and_jsx(BOARD, items, CACHE)
             self._set_status(text=f"Board → {BOARD} | attribution.txt + load_in_photoshop.jsx (File > Scripts > Browse in Photoshop)")
             messagebox.showinfo("PSD export",
-                f"Saved board folder:\n{BOARD}\n\n- {os.path.basename(psd)} (flattened contact sheet)\n- load_in_photoshop.jsx (run in Photoshop: File > Scripts > Browse)\n- attribution.txt (paste into your PSD credits layer)")
+                f"Saved board folder:\n{BOARD}\n\n- {os.path.basename(psd)} (one layer per image)\n- load_in_photoshop.jsx (run in Photoshop: File > Scripts > Browse)\n- attribution.txt (paste into your PSD credits layer)")
         except Exception as e:
             messagebox.showerror("PSD failed", str(e))
 
