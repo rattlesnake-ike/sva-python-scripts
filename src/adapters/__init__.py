@@ -14,6 +14,11 @@ from .rijks import search as search_rijks
 from .mia import search as search_mia
 from .ia import search as search_ia
 from .walters import search as search_walters
+# bhl.py is not in the zip: without this guard the import fails and the app never opens
+try:
+    from .bhl import search as search_bhl
+except ImportError:
+    search_bhl = None
 
 # Every source must carry verifiable dates in its metadata (OpenVerse was
 # removed: no artwork dates, only index timestamps).
@@ -32,8 +37,9 @@ ADAPTERS = {
     "Rijksmuseum": search_rijks,
     "Mia": search_mia,
     "InternetArchive": search_ia,
-    "BHL": search_bhl,
     "Walters": search_walters,
 }
+if search_bhl is not None:
+    ADAPTERS["BHL"] = search_bhl
 
 
