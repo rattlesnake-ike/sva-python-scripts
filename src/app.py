@@ -3,7 +3,8 @@ Standalone panel that mirrors the Photoshop-panel mockup. stdlib + requests + pi
 Run:  python app.py
 """
 import os, json, copy, re, threading, queue, time, urllib.request, datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _wait_all
+from concurrent.futures import TimeoutError as _SearchTimeout
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -268,6 +269,13 @@ def _download(url, dest, retries=2, limit=15_000_000):
             if attempt + 1 < retries:
                 time.sleep(0.5 * (attempt + 1))
         raise last
+
+# Seconds the grid waits for the sources before it draws. Measured 2026-11-10 on
+# three prompts: 12 of 15 sources answer within 3 s, Met takes up to 15 s,
+# OpenVerse 15-34 s and LOC 80-90 s. A source that needs longer keeps searching
+# in the background (up to LATE_WAIT) and its results are added when it answers.
+SOURCE_WAIT = 8
+LATE_WAIT = 150
 
 TIME_CHOICES = ["13th century", "14th century", "15th century", "16th century",
                 "17th century", "18th century", "19th century", "20th century",
@@ -1229,6 +1237,7 @@ class App(tk.Tk):
         # enlarged (_big) refs are kept so open lightboxes survive a research
         self.photos = {k: v for k, v in self.photos.items() if k.endswith("_big")}
         self.prefetch_gen += 1  # cancel any previous search's full-file prefetcher
+        self._search_gen = getattr(self, "_search_gen", 0) + 1  # late answers for an older search are dropped
         # seed this prompt's rejection memory: ids dismissed in an earlier
         # session under the same prompt never enter the grid again
         self.prompt_key = prompt_key(b)
@@ -1268,14 +1277,21 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
-    def _search_worker_job(self, q, b, append=False):
-        logline(f"SEARCH brief={json.dumps(b)[:200]} query={q!r} append={append}")
+    def _search_worker_job(self, q, b, append=False, late_got=None):
+        """late_got={source: {query: (items, err)}} is the second pass of one
+        search: answers that arrived after the grid was drawn. They go through
+        the same checks and are added to the grid (no new network calls)."""
+        logline(f"SEARCH brief={json.dumps(b)[:200]} query={q!r} append={append}"
+                + (f" late={sorted(late_got)}" if late_got else ""))
+        gen = getattr(self, "_search_gen", 0)
         queries = build_search_queries(b)
         logline(f"QUERIES {queries}")
         # wide-but-faithful: bigger per-source budgets, primary + variants
         # merged per source, validator hides anything off-prompt.
         AD = _adapters()
         names = [n for n in AD if self.source_vars.get(n, None) is None or self.source_vars[n].get()]
+        if late_got is not None:
+            names = [n for n in names if n in late_got]
         # Pull as many matches as possible: budgets raised so the full pool
         # survives validation/hiding (mismatches still hidden). Cap is applied
         # later only to keep the grid renderable; overflow holds the rest.
@@ -1313,15 +1329,33 @@ class App(tk.Tk):
         # one pool over (source, query) pairs: a source's queries run together
         # instead of sequentially, so search time is the slowest single query,
         # not the sum per source. Repeat prompts hit the session cache.
-        got = {}
-        with ThreadPoolExecutor(max_workers=20) as pool:
+        # The grid no longer waits for the slowest source: after SOURCE_WAIT
+        # seconds it draws what has arrived, and the progress row names the
+        # sources still out.
+        got, slow, futs = {}, [], {}
+        if late_got is not None:
+            got = late_got
+        else:
+            out = {}                      # source -> queries not answered yet
+            for n, _vq, _lim in tasks:
+                out[n] = out.get(n, 0) + 1
+            pool = ThreadPoolExecutor(max_workers=20)
             futs = {pool.submit(fetch_one, t): t for t in tasks}
-            for fut in as_completed(futs):
-                name, vq, items, err = fut.result()
-                got.setdefault(name, {})[vq] = (items, err)
-                done[0] += 1
-                pct = int(done[0] / total * 100)
-                self.prog_queue.put((pct, f"Searching {pct}% — {done[0]}/{total} queries ({name} done)"))
+            try:
+                for fut in as_completed(futs, timeout=SOURCE_WAIT):
+                    name, vq, items, err = fut.result()
+                    got.setdefault(name, {})[vq] = (items, err)
+                    done[0] += 1
+                    out[name] -= 1
+                    still = [n for n in names if out.get(n)]
+                    pct = int(done[0] / total * 100)
+                    msg = f"Searching {pct}% — {len(names) - len(still)}/{len(names)} sources answered"
+                    if still:
+                        msg += " — waiting on " + ", ".join(still[:4]) + ("…" if len(still) > 4 else "")
+                    self.prog_queue.put((pct, msg))
+            except _SearchTimeout:
+                slow = [n for n in names if out.get(n)]
+            pool.shutdown(wait=False)     # slow sources keep running in the background
         results = {}
         for name in names:
             items, err = merge_plans(plans[name], got.get(name, {}), queries[0])
@@ -1337,6 +1371,27 @@ class App(tk.Tk):
             all_items.extend(items)
             if err:
                 errors.append(err)
+        if slow:   # first in the status line, ahead of the "no API key" notes
+            errors.insert(0, f"{', '.join(slow)}: still searching after {SOURCE_WAIT}s — results are added when they answer")
+        if slow and not append:
+            def _late(slow=tuple(slow)):
+                mine = [f for f, t in futs.items() if t[0] in slow]
+                _wait_all(mine, timeout=LATE_WAIT)
+                if gen != getattr(self, "_search_gen", 0):
+                    return                # the user has started another search
+                late = {}
+                for f in mine:
+                    name, vq, _lim = futs[f]
+                    if f.done():
+                        _n, _vq, items, err = f.result()
+                    else:
+                        items, err = [], f"{name} [{vq}]: no answer after {SOURCE_WAIT + LATE_WAIT}s"
+                    late.setdefault(name, {})[vq] = (items, err)
+                try:
+                    self._search_worker_job(q, b, append=True, late_got=late)
+                except Exception as e:
+                    logline(f"LATE-FAIL {e}")
+            threading.Thread(target=_late, daemon=True).start()
         # rejection memory: ids dismissed under this prompt (or globally) never
         # return — filtered before ranking so their slots go to fresh results
         n_blocked = 0
@@ -1401,10 +1456,15 @@ class App(tk.Tk):
             new_items = [it for it in shown
                          if it.get("id") not in existing
                          and it.get("id") not in self.dismissed]
+            if late_got is not None and gen != getattr(self, "_search_gen", 0):
+                return
             self._overflow.extend(new_items)
             logline(f"  APPEND {len(new_items)} new candidate(s) to overflow")
             try:
-                self.after(0, self._refill)
+                if late_got is not None:
+                    self.after(0, lambda: self._add_late(names, errors))
+                else:
+                    self.after(0, self._refill)
             except Exception as e:
                 logline(f"REFILL-FAIL {e}")
         else:
@@ -1652,6 +1712,37 @@ class App(tk.Tk):
             threading.Thread(target=self._refill_fetch, args=(b,), daemon=True).start()
         self._regrid()
         return False
+
+    def _add_late(self, names, errors):
+        """A slow source answered after the grid was drawn: add its cards."""
+        shown = {r.get("id") for r in self.results}
+        added = 0
+        while self._overflow and len(self.results) < 500:
+            nxt = self._overflow.pop(0)
+            if nxt.get("id") in self.dismissed or nxt.get("id") in shown:
+                continue
+            shown.add(nxt.get("id"))
+            self.results.append(nxt)
+            self.result_cards.append(nxt.get("id"))
+            self._build_card(nxt)
+            added += 1
+        if added:
+            self._regrid()
+            self._schedule_resize()
+            self.count_srcs = sorted(set(it["_src"] for it in self.results)) or ["—"]
+            self.n_shown = len(self.results)
+            self._update_count()
+            try:
+                self.canvas.delete(self._empty_text)
+                self._empty_text = None
+            except (tk.TclError, AttributeError):
+                pass
+        msg = f"{', '.join(names)} answered late: {added} more result(s) added."
+        if errors:
+            msg += " " + " | ".join(errors)
+        logline("LATE " + msg[:200])
+        self._set_progress(text=f"Done 100% - {msg[:90]}")
+        self._set_status(text=msg[:220])
 
     def _refill_fetch(self, b):
         try:
