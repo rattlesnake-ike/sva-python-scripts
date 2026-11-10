@@ -27,6 +27,7 @@ def _adapters():
         _AD["ADAPTERS"] = ADAPTERS
     return _AD["ADAPTERS"]
 import store
+import picture_check
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(BASE, "cache")
@@ -282,6 +283,14 @@ LATE_WAIT = 150
 # 462 MB in cache/ after one "tiger" search. At start-up the oldest cache
 # files are removed until the folder is under CACHE_LIMIT bytes.
 PREFETCH = 24
+
+# Picture check (picture_check.py, optional): a preview that scores under this
+# is hidden as "not seen in the picture". Measured on a "tiger" search, 250
+# previews sorted by score and read by eye: the 38 under 0.05 were Tiger Hill
+# landscapes, tiger lilies, plates, a table, moths... with about 4 small or
+# stylized tigers among them; between 0.05 and 0.2, 17 of 30 did show a tiger,
+# so the line stays low. Raise it to hide more, at the cost of real tigers.
+PICTURE_MIN = 0.05
 CACHE_LIMIT = 300_000_000
 
 def trim_cache(folder=None, limit=None):
@@ -1689,6 +1698,9 @@ class App(tk.Tk):
         self._schedule_resize()
         self._prefetch_fulls(list(self.results))
         msg = " | ".join(errors) if errors else "All sources OK."
+        off = picture_check.status()
+        msg = ("Picture check on. " if not off else
+               f"Picture check off ({off}; run: python picture_check.py --setup). ") + msg
         self._set_status(text=msg[:220])
 
     def _build_card(self, it, x=0, y=0):
@@ -1833,8 +1845,9 @@ class App(tk.Tk):
             self._search_worker_job(q, b, append=True)
         except Exception as e:
             logline(f"REFILL-FETCH-FAIL {e}")
-        finally:
-            self._refill_fetching = False
+        # _refill_fetching stays set until the next Search: the same prompt
+        # returns the same records, and resetting it here re-ran the whole
+        # search (15 sources) after every hidden card - six times in one grid
 
     def _remember_dismissed(self, item_id):
         """Record an id as dismissed everywhere (a copy of a dismissed picture)."""
@@ -1966,6 +1979,10 @@ class App(tk.Tk):
             # at once would starve the window just the same.
             with _CLASSIFY_LOCK:
                 im.info["retriever_type"] = classify_image_type(im)
+            # does the picture itself show the prompt? (None = check is off)
+            if brief:
+                im.info["retriever_seen"] = picture_check.score(
+                    im, " ".join(keywords(brief.get("title", "") or "", cap=6)))
             self.img_queue.put(("img", it["id"], im, label))
             if brief and photo_gate(fn, it, brief) == "modern":
                 self.img_queue.put(("gate", it["id"], None, None))
@@ -2021,6 +2038,13 @@ class App(tk.Tk):
                             self._hide_card(_id, "same picture as another result")
                             continue
                         self.img_hashes[_id] = pic
+                    # the words matched, but the picture does not show them
+                    seen = im.info.get("retriever_seen")
+                    if seen is not None and seen < PICTURE_MIN:
+                        words = " ".join(keywords(self.gate_brief.get("title", "") or "", cap=6))
+                        logline(f"PICTURE-CHECK hid {_id} score={seen:.3f}")
+                        self._hide_card(_id, f"picture check: no {words} seen in the picture")
+                        continue
                     # pixel-based type classification + media-toggle enforcement
                     itype = im.info.get("retriever_type") or classify_image_type(im)
                     self.img_types[_id] = itype

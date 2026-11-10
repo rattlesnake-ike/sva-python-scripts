@@ -10,3 +10,4 @@ src/board/*.jsx
 src/board/attribution.txt
 src/_*.jpg
 src/.venv/
+src/models/
