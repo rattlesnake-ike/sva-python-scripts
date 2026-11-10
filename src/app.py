@@ -921,7 +921,7 @@ class App(tk.Tk):
             self.source_vars[name] = v
             _src_toggle(src_box, name, v, i // 4, i % 4)
         self.lbl_status = ttk.Label(f, style="Muted.TLabel",
-                                    text="Ready. 14 sources. Tip: wrap a phrase in quotes (e.g. \"ice cream\") to require that exact text.",
+                                    text=f"Ready. {len(self.source_vars)} sources. Tip: wrap a phrase in quotes (e.g. \"ice cream\") to require that exact text.",
                                     anchor="w", justify="left", width=80, wraplength=680)
         self.lbl_status.grid(row=7, column=0, columnspan=4, sticky="w")
         self._status_after = None
