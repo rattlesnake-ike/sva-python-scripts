@@ -277,6 +277,39 @@ def _download(url, dest, retries=2, limit=15_000_000):
 SOURCE_WAIT = 8
 LATE_WAIT = 150
 
+# Full-size files are fetched ahead only for the first PREFETCH cards (the
+# rest load when a card is enlarged or approved): fetching all of them put
+# 462 MB in cache/ after one "tiger" search. At start-up the oldest cache
+# files are removed until the folder is under CACHE_LIMIT bytes.
+PREFETCH = 24
+CACHE_LIMIT = 300_000_000
+
+def trim_cache(folder=None, limit=None):
+    """Delete the oldest files in cache/ until it holds at most `limit` bytes.
+    Returns (files removed, bytes left)."""
+    folder = folder or CACHE
+    limit = CACHE_LIMIT if limit is None else limit
+    files = []
+    try:
+        for name in os.listdir(folder):
+            p = os.path.join(folder, name)
+            if os.path.isfile(p):
+                files.append((os.path.getmtime(p), os.path.getsize(p), p))
+    except OSError:
+        return 0, 0
+    total = sum(f[1] for f in files)
+    removed = 0
+    for _mtime, size, p in sorted(files):
+        if total <= limit:
+            break
+        try:
+            os.remove(p)
+            total -= size
+            removed += 1
+        except OSError:
+            pass
+    return removed, total
+
 TIME_CHOICES = ["13th century", "14th century", "15th century", "16th century",
                 "17th century", "18th century", "19th century", "20th century",
                 "21st century"]
@@ -779,6 +812,7 @@ class App(tk.Tk):
         self.panes.bind("<ButtonRelease-1>", lambda e: setattr(self, "_sash_dragging", False))
         self.minsize(640, 420)
         self.geometry("980x740")
+        threading.Thread(target=trim_cache, daemon=True).start()
         self.after(150, lambda: self._position_sashes())
         self.after(200, self._drain_images)
         self.after(100, self._poll_progress)
@@ -1846,8 +1880,12 @@ class App(tk.Tk):
 
     def _prefetch_fulls(self, items):
         """Idle-download full files after a search so enlarge() is instant.
-        A small pool overlaps network waits; bumping prefetch_gen cancels."""
-        self.prefetch_gen += 1
+        A small pool overlaps network waits; bumping prefetch_gen cancels.
+        Only the first PREFETCH cards of a grid are fetched ahead; a single
+        card (refill, approval) is fetched without cancelling the others."""
+        if len(items) > 1:
+            self.prefetch_gen += 1
+            items = items[:PREFETCH]
         gen = self.prefetch_gen
 
         def one(it):
@@ -1898,13 +1936,30 @@ class App(tk.Tk):
                 im = Image.open(fn).convert("RGB")
             except Exception:
                 os.remove(fn)  # corrupt cache: re-fetch once, then give up
-                _download(url, fn, limit=3_000_000)
+                # a file over the 3 MB limit is cut short and unreadable, and
+                # the same URL would be cut again: take the small one instead
+                _download(it.get("thumb_url") or url, fn, limit=3_000_000)
                 im = Image.open(fn).convert("RGB")
+            # keep a preview-sized copy on disk, not the download (up to 3 MB
+            # each: 186 MB of "previews" after one search)
+            if os.path.getsize(fn) > 120_000:
+                try:
+                    small = im.copy()
+                    small.thumbnail((640, 480))
+                    with _dest_lock(fn):
+                        small.save(fn + ".tmp", "JPEG", quality=82)
+                        os.replace(fn + ".tmp", fn)
+                except Exception:
+                    pass   # the larger file still works
             im.thumbnail((480, 360))
             self.img_queue.put(("img", it["id"], im, label))
             if brief and photo_gate(fn, it, brief) == "modern":
                 self.img_queue.put(("gate", it["id"], None, None))
         except Exception:
+            try:
+                os.remove(fn)   # never leave an unreadable preview in cache/
+            except OSError:
+                pass
             self.img_queue.put(("img", it["id"], None, label))
 
     def _drain_images(self):
@@ -1986,6 +2041,7 @@ class App(tk.Tk):
             self.approved_store.setdefault(self.prompt_key, set()).add(item_id)
             save_approved(self.approved_store)
             self.approved_ids.add(item_id)
+            self._prefetch_fulls([it])   # the exports need its full-size file
             # weighted feedback: track approved sources/media for boosting
             src = it.get("_src") or it.get("source")
             if src:
@@ -2180,6 +2236,16 @@ class App(tk.Tk):
         if not items:
             messagebox.showinfo("Export", "Nothing to export — search first.")
             return
+        # approved images whose full-size file is not in cache/ yet would be
+        # left out of the PSD: fetch them first
+        for it in self.approved + self.toreview:
+            fn = os.path.join(CACHE, (it.get("id") or "img").replace("/", "_") + ".full")
+            url = it.get("large_url") or it.get("image_url") or ""
+            if url and (not os.path.exists(fn) or os.path.getsize(fn) < 1000):
+                try:
+                    _download(url, fn, retries=1)
+                except Exception as e:
+                    logline(f"PSD-FETCH-FAIL {it.get('id')} {e}")
         try:
             psd, jsx = store.export_psd_and_jsx(BOARD, items, CACHE)
             self._set_status(text=f"Board → {BOARD} | attribution.txt + load_in_photoshop.jsx (File > Scripts > Browse in Photoshop)")
