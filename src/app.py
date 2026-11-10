@@ -1640,7 +1640,15 @@ class App(tk.Tk):
         self.b_search.config(state="normal")
         self._searching = False
         self._set_progress(pct=100)
-        self._set_progress(text="Done 100% - loading previews.")
+        # a progress note still in the queue must not overwrite this line
+        try:
+            while True:
+                self.prog_queue.get_nowait()
+        except queue.Empty:
+            pass
+        slow = next((e.split(":")[0] for e in errors if "still searching" in e), "")
+        self._set_progress(text="Done 100% - loading previews." if not slow else
+                           f"Showing what has arrived - still waiting on {slow}.")
         srcs = sorted(set(it["_src"] for it in self.results)) or ["—"]
         self.count_srcs = srcs
         self.n_shown, self.n_hidden = len(self.results), hidden
