@@ -828,6 +828,13 @@ class App(tk.Tk):
         self.lbl_status.grid(row=7, column=0, columnspan=4, sticky="w")
         self._status_after = None
         self._status_queue = []
+        self.lbl_suggest = ttk.Label(f, style="Muted.TLabel", text="", wraplength=700)
+        self.lbl_suggest.grid(row=9, column=0, columnspan=4, sticky="w")
+        # mouse wheel scrolls the brief pane too
+        self._bind_wheel(f, _bc)
+        _bc.bind("<MouseWheel>", lambda e, c=_bc: self._wheel(e, c))
+        _bc.bind("<Shift-MouseWheel>", lambda e, c=_bc: self._wheel(e, c, True))
+        return outer
 
     def _set_status(self, text):
         """Debounced, slowed status updates so the bar doesn't jitter."""
@@ -840,13 +847,6 @@ class App(tk.Tk):
                 self.lbl_status.config(text=self._status_queue[-1])
                 self._status_queue = []
         self._status_after = self.after(120, _drain)
-        self.lbl_suggest = ttk.Label(f, style="Muted.TLabel", text="", wraplength=700)
-        self.lbl_suggest.grid(row=9, column=0, columnspan=4, sticky="w")
-        # mouse wheel scrolls the brief pane too
-        self._bind_wheel(f, _bc)
-        _bc.bind("<MouseWheel>", lambda e, c=_bc: self._wheel(e, c))
-        _bc.bind("<Shift-MouseWheel>", lambda e, c=_bc: self._wheel(e, c, True))
-        return outer
 
     def _build_results(self, parent):
         f = ttk.LabelFrame(parent, text="RESULTS", padding=8)
