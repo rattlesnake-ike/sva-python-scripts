@@ -300,6 +300,46 @@ def split_results(shown, cap=200):
     card's slot can be refilled without re-querying."""
     return shown[:cap], shown[cap:]
 
+# Records that are an object NAMED after the subject, not a picture of it: a
+# search for "ice cream" brings back ice cream plates, cups and pails. They are
+# not hidden, only sorted below the pictures (see off_target).
+OBJECT_MEDIA = ("ceramic", "porcelain", "earthenware", "stoneware", "faience",
+                "glass", "silver", "pewter", "metalwork", "enamel", "furniture",
+                "textile", "decorative art")
+OBJECT_NOUNS = {"plate", "dish", "cup", "pail", "spoon", "fork", "knife", "mold",
+                "mould", "freezer", "cooler", "slicer", "pitcher", "jug", "pot",
+                "bowl", "saucer", "bucket", "vase", "tray", "service", "lid",
+                "liner", "box", "jar", "bottle", "chest"}
+
+def off_target(it, brief):
+    """Why a record that passed the validator still sorts last, or "".
+    Two plain rules, both read from the record's own text:
+      1. a prompt of two or more words wants all of them ("ice cream", not
+         "Ice Skaters" or "Cream Pot");
+      2. an object named after the subject is not a picture of it: the prompt
+         is followed by an object word ("Ice Cream Plate"), or the medium is
+         an object material (porcelain, silver, glass...).
+    Rule 2 is off when the prompt itself names an object or a material."""
+    from validator import _canon
+    keys = [_canon(k) for k in keywords((brief or {}).get("title", "") or "", cap=6)]
+    if not keys:
+        return ""
+    title = (it.get("title") or "").lower()
+    medium = str(it.get("medium") or "").lower()
+    words = [_canon(w) for w in re.findall(r"[a-z']{3,}", title)]
+    hay = set(words) | {_canon(w) for w in re.findall(
+        r"[a-z']{3,}", medium + " " + (it.get("creator") or "").lower())}
+    if len(keys) > 1 and not all(k in hay for k in keys):
+        return "has only part of the prompt"
+    if any(k in OBJECT_NOUNS or any(k in m for m in OBJECT_MEDIA) for k in keys):
+        return ""
+    for i, w in enumerate(words[:-1]):
+        if w == keys[-1] and words[i + 1] in OBJECT_NOUNS:
+            return "object named after the subject"
+    if any(m in medium for m in OBJECT_MEDIA):
+        return "object, not a picture"
+    return ""
+
 def rank_key(it, brief=None):
     """Sort key: verdict band first, then fit-quality signals within the band.
     Approved items (and items whose source/medium correlate with approvals)
@@ -329,7 +369,8 @@ def rank_key(it, brief=None):
     except Exception:
         pass
     approved = -1 if it.get("_approved") else 0
-    return (approved + boost, band, place, variant, backfill)
+    off = 1 if (brief and off_target(it, brief)) else 0
+    return (approved + boost, band, off, place, variant, backfill)
 
 DISMISSED_FILE = os.path.join(BOARD, "dismissed.json")
 
