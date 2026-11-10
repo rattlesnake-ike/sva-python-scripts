@@ -543,31 +543,31 @@ def _hamming(a, b):
 # different pictures by 4.
 PIC_BITS = 2
 
+_CLASSIFY_LOCK = threading.Lock()
+
 def classify_image_type(img):
     """Heuristic photo vs illustration classifier from pixels (no model/deps).
     Returns 'photograph', 'illustration', or 'unknown'. Based on edge density,
     colour variance and saturation distribution."""
     try:
+        # Same measurements as before, done by Pillow instead of a Python
+        # loop over every pixel (43 ms -> about 1 ms per preview; the loop
+        # froze the window while a grid of previews loaded).
+        from PIL import ImageChops, ImageStat
         g = img.convert("L")
-        px = list(g.getdata())
-        n = len(px)
-        mean = sum(px) / n
-        var = sum((v - mean) ** 2 for v in px) / n
-        # edge density via simple 4-neighbour gradient
         w, h = g.size
-        edges = 0
-        for y in range(1, h):
-            for x in range(1, w):
-                idx = y * w + x
-                gx = abs(px[idx] - px[idx - 1])
-                gy = abs(px[idx] - px[idx - w])
-                if (gx + gy) > 40:
-                    edges += 1
+        n = w * h
+        stat = ImageStat.Stat(g)
+        mean = stat.mean[0]
+        var = stat.var[0]
+        # edge density via simple 4-neighbour gradient
+        gx = ImageChops.difference(g, ImageChops.offset(g, 1, 0))
+        gy = ImageChops.difference(g, ImageChops.offset(g, 0, 1))
+        both = ImageChops.add(gx, gy).crop((1, 1, w, h))
+        edges = sum(both.histogram()[41:])
         edge_density = edges / max(1, (w - 1) * (h - 1))
         # saturation
-        hsv = img.convert("HSV")
-        sats = [p[1] for p in hsv.getdata()]
-        sat_mean = sum(sats) / len(sats)
+        sat_mean = ImageStat.Stat(img.convert("HSV").getchannel("S")).mean[0]
         # photos: wider tonal range, lower edge density, moderate saturation
         # illustrations: flat colours, high edge density, high saturation
         if edge_density > 0.18 and sat_mean > 90:
@@ -575,7 +575,7 @@ def classify_image_type(img):
         if var > 1500 and edge_density < 0.12:
             return "photograph"
         # written letters/words on paper: mostly white background with dark text
-        white_ratio = sum(1 for v in px if v > 230) / n
+        white_ratio = sum(g.histogram()[231:]) / n
         if white_ratio > 0.55 and edge_density > 0.05 and sat_mean < 40:
             return "document"
         return "unknown"
@@ -1960,6 +1960,12 @@ class App(tk.Tk):
                 except Exception:
                     pass   # the larger file still works
             im.thumbnail((480, 360))
+            # judge the picture type here, not on the window's thread: 43 ms
+            # per preview there froze the window while 300 previews loaded.
+            # One at a time: 24 download threads all doing this arithmetic
+            # at once would starve the window just the same.
+            with _CLASSIFY_LOCK:
+                im.info["retriever_type"] = classify_image_type(im)
             self.img_queue.put(("img", it["id"], im, label))
             if brief and photo_gate(fn, it, brief) == "modern":
                 self.img_queue.put(("gate", it["id"], None, None))
@@ -1976,9 +1982,11 @@ class App(tk.Tk):
         # Only auto-hides (no preview / color-gate) collapse rows, so those
         # are deferred until the user stops scrolling.
         Image, ImageTk = _need_imaging()
+        handled = 0
         try:
-            while True:
+            while handled < 12:   # a few per tick, so clicks and scrolling get a turn
                 msg = self.img_queue.get_nowait()
+                handled += 1
                 if msg[0] == "gate":
                     if self._scrolling():
                         self.img_queue.put(msg)
@@ -2014,7 +2022,7 @@ class App(tk.Tk):
                             continue
                         self.img_hashes[_id] = pic
                     # pixel-based type classification + media-toggle enforcement
-                    itype = classify_image_type(im)
+                    itype = im.info.get("retriever_type") or classify_image_type(im)
                     self.img_types[_id] = itype
                     if itype == "photograph" and not self.v_photo.get():
                         self._hide_card(_id, "photo (pixel-classified) excluded by medium toggle")
@@ -2035,7 +2043,7 @@ class App(tk.Tk):
             self._resize_pending = False
             self._schedule_resize()
         # tick faster while scrolling so deferred hides flush promptly
-        self.after(80 if self._scrolling() else 200, self._drain_images)
+        self.after(30 if handled >= 12 else (80 if self._scrolling() else 200), self._drain_images)
 
     # ---------- collections ----------
     def collect(self, it, ok):
