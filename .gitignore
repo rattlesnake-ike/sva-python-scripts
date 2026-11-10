@@ -9,3 +9,4 @@ src/board/board.psd
 src/board/*.jsx
 src/board/attribution.txt
 src/_*.jpg
+src/.venv/

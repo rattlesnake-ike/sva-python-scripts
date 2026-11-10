@@ -15,7 +15,7 @@
     },
     "launchProcess": {
       "schemes": ["file", "http", "https"],
-      "extensions": [".bat", ".cmd", ".vbs", ".py", ".pdf", ".txt", ".json"]
+      "extensions": [".bat", ".cmd", ".vbs", ".command", ".py", ".pdf", ".txt", ".json"]
     }
   },
   "icons": [

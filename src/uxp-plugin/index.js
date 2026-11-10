@@ -54,6 +54,11 @@ function homeDir() {
   return null;
 }
 
+// Windows joins folders with "\\", a Mac with "/". A Mac home folder starts with "/".
+const IS_MAC = (homeDir() || "").charAt(0) === "/";
+const SEP = IS_MAC ? "/" : "\\";
+const MAC_LAUNCHER = "run.command"; // the Mac counterpart of run.bat
+
 function shellOpenPath(path) {
   return require("uxp").shell.openPath(path);
 }
@@ -104,9 +109,9 @@ async function writeText(path, text) {
 async function isRetrieverFolder(dir) {
   if (!dir) return false;
   return (
-    (await exists(dir + "\\" + tool.launcher)) ||
-    (await exists(dir + "\\" + tool.hiddenLauncher)) ||
-    (await exists(dir + "\\" + tool.entry))
+    (await exists(dir + SEP + tool.launcher)) ||
+    (await exists(dir + SEP + tool.hiddenLauncher)) ||
+    (await exists(dir + SEP + tool.entry))
   );
 }
 
@@ -144,7 +149,7 @@ function forgetLocal() {
 // chosen once stays the default on this machine until it is changed by hand.
 function pointerPath() {
   const home = homeDir();
-  return home ? home + "\\" + tool.pointerFile : null;
+  return home ? home + SEP + tool.pointerFile : null;
 }
 
 async function readPointer() {
@@ -164,7 +169,7 @@ async function writePointer(dir) {
 
 // Load the project's own contract (which script launches the tool, etc).
 async function loadToolConfig(dir) {
-  const txt = await readText(dir + "\\" + CONFIG_FILE);
+  const txt = await readText(dir + SEP + CONFIG_FILE);
   if (!txt) return DEFAULT_TOOL;
   try {
     const cfg = JSON.parse(txt);
@@ -218,7 +223,7 @@ async function resolveRetriever() {
   const home = homeDir();
   if (home) {
     for (const rel of HOME_CANDIDATES) {
-      const dir = home + "\\" + rel;
+      const dir = home + SEP + rel.split("\\").join(SEP);
       if (await isRetrieverFolder(dir)) {
         rememberLocal(dir);
         await writePointer(dir);
@@ -283,10 +288,12 @@ async function launchRetriever() {
   }
 
   // Reuse the project's own launchers, console-free variant first.
-  const candidates = [
-    { label: tool.hiddenLauncher, path: dir + "\\" + tool.hiddenLauncher },
-    { label: tool.launcher, path: dir + "\\" + tool.launcher },
-  ];
+  const candidates = IS_MAC
+    ? [{ label: MAC_LAUNCHER, path: dir + SEP + MAC_LAUNCHER }]
+    : [
+        { label: tool.hiddenLauncher, path: dir + SEP + tool.hiddenLauncher },
+        { label: tool.launcher, path: dir + SEP + tool.launcher },
+      ];
 
   const errors = [];
   for (const c of candidates) {
@@ -319,7 +326,7 @@ async function openBoardFolder() {
     setStatus("The saved folder is not there any more: " + dir, true);
     return;
   }
-  const board = dir + "\\" + tool.boardFolder;
+  const board = dir + SEP + tool.boardFolder;
   try {
     const err = await shellOpenPath(board);
     if (err) {
