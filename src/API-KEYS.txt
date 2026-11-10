@@ -1,0 +1,33 @@
+AI Reference Retriever - API keys
+===================================
+
+THIS ZIP HAS NO API KEYS IN IT.
+
+Nothing is lost by leaving them out - the tool runs with eleven of its
+thirteen sources, and Harvard and Europeana simply report "no API key" until
+you add yours.
+
+On the new PC, either copy your two key files across, or create them by
+hand (one key per file), or set the environment variables.
+
+
+The keys live in two files next to app.py:
+    .harvard_key       - the Harvard Art Museums API key
+    .europeana_key     - the Europeana API key
+
+To use different keys, either replace the contents of those two files
+(one key per file, no quotes, no extra text), or set the environment
+variables instead - the environment wins if both are present:
+
+    setx HARVARD_API_KEY "your-key"
+    setx EUROPEANA_API_KEY "your-key"
+
+Both services have free keys:
+    Harvard   https://github.com/harvardartmuseums/api-docs
+    Europeana https://pro.europeana.eu/pages/get-api
+
+Without these two keys the other twelve sources (NGA, LOC, Met, Commons,\nCleveland, AIC, Wellcome, OpenVerse, SMK, Rijksmuseum, Mia, InternetArchive) work normally;
+only Harvard and Europeana report "no API key".
+
+SMK, Rijksmuseum, Mia, and InternetArchive need no key and only return records the source
+itself marks as public domain. They do not use a "best guess" rights filter.

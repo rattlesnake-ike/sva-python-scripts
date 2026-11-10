@@ -1,0 +1,74 @@
+{
+  "id": "com.retriever.launcher",
+  "name": "Production Processor",
+  "version": "1.0.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": {
+    "app": "PS",
+    "minVersion": "24.0.0"
+  },
+  "requiredPermissions": {
+    "localFileSystem": "fullAccess",
+    "network": {
+      "domains": ["*"]
+    },
+    "launchProcess": {
+      "schemes": ["file", "http", "https"],
+      "extensions": [".bat", ".cmd", ".vbs", ".py", ".pdf", ".txt", ".json"]
+    }
+  },
+  "icons": [
+    {
+      "width": 24,
+      "height": 24,
+      "path": "icons/plugin.png",
+      "scale": [1, 2],
+      "theme": ["all"],
+      "species": ["pluginList"]
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "retrieverPanel",
+      "label": {
+        "default": "Retriever"
+      },
+      "minimumSize": {
+        "width": 230,
+        "height": 200
+      },
+      "maximumSize": {
+        "width": 400,
+        "height": 600
+      },
+      "preferredDockedSize": {
+        "width": 250,
+        "height": 330
+      },
+      "preferredFloatingSize": {
+        "width": 250,
+        "height": 330
+      },
+      "icons": [
+        {
+          "width": 23,
+          "height": 23,
+          "path": "icons/dark/icon.png",
+          "scale": [1, 2],
+          "theme": ["darkest", "dark", "medium"],
+          "species": ["toolbar"]
+        },
+        {
+          "width": 23,
+          "height": 23,
+          "path": "icons/light/icon.png",
+          "scale": [1, 2],
+          "theme": ["lightest", "light"],
+          "species": ["toolbar"]
+        }
+      ]
+    }
+  ]
+}

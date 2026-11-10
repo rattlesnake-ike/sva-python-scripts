@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: Segoe UI, sans-serif; background: #2b2b2b; color: #eee;
+         margin: 0; padding: 12px; text-align: center; }
+  h3 { margin: 0 0 10px; font-size: 14px; font-weight: normal; }
+  button { width: 100%; padding: 14px 0; margin: 6px 0; font-size: 15px;
+           background: #0b5fff; color: #fff; border: none; border-radius: 6px;
+           cursor: pointer; }
+  button.ghost { background: #444; padding: 9px 0; font-size: 13px; }
+  button:active { transform: translateY(1px); }
+  #msg { font-size: 11px; color: #aaa; min-height: 14px; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h3>Production Processor</h3>
+  <button id="launch">&#128269; Open Retriever</button>
+  <button id="board" class="ghost">Open board folder</button>
+  <div id="msg"></div>
+  <script src="./js/CSInterface.js"></script>
+  <script>
+    var cs = new CSInterface();
+    function say(t) { document.getElementById("msg").textContent = t; }
+    document.getElementById("launch").onclick = function () {
+      say("launching...");
+      cs.evalScript("productionProcessorLaunch()", function (r) { say(r || ""); });
+    };
+    document.getElementById("board").onclick = function () {
+      cs.evalScript("productionProcessorBoard()", function (r) { say(r || ""); });
+    };
+  </script>
+</body>
+</html>

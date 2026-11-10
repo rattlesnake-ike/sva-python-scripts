@@ -1,0 +1,16 @@
+{
+  "id": "com.retriever.launcher",
+  "name": "Production Processor",
+  "version": "1.0.0",
+  "tool": {
+    "entry": "app.py",
+    "launcher": "run.bat",
+    "hiddenLauncher": "start_hidden.vbs",
+    "boardFolder": "board",
+    "pointerFile": "production_processor_dir.txt"
+  },
+  "photoshop": {
+    "default": "uxp",
+    "fallbacks": ["jsx", "cep"]
+  }
+}

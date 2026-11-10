@@ -1,0 +1,95 @@
+AI REFERENCE RETRIEVER - PORTABLE SETUP (2 minutes, no issues checklist)
+=========================================================================
+
+WHAT'S IN THIS ZIP
+- The full tool (10 sources: NGA, LOC, Europeana, Met, Commons, Cleveland,
+  AIC, Wellcome, Harvard, OpenVerse PD-only)
+- data/nga.sqlite : the NGA index (82MB, prebuilt - nothing to download)
+- run.bat         : double-click launcher (installs libraries, starts the tool)
+
+NEW PC CHECKLIST
+1. Install Python 3.11 or newer from https://www.python.org/downloads/
+   - IMPORTANT: on the first installer screen tick "Add python.exe to PATH".
+   - The installer includes Tkinter (the tool's interface) by default.
+   - No Python? run.bat will tell you and stop.
+2. Unzip this file anywhere (e.g. Documents\).
+3. API keys - depends which zip you were given:
+   - ai-reference-retriever-WITH-KEYS.zip
+       Your keys are already in it, as .harvard_key and .europeana_key next
+       to app.py. Nothing to do. Treat the file like a password: anyone you
+       send that zip to can spend your key quota.
+   - ai-reference-retriever-NO-KEYS.zip
+       No keys are in it. The tool still works with eight of its ten
+       sources; Harvard and Europeana report "no API key" until you add
+       yours. Either copy your two key files across, or create them by hand
+       (one key per file, next to app.py), or set the environment:
+           setx EUROPEANA_API_KEY "your-key"
+           setx HARVARD_API_KEY "your-key"
+       Free keys: Europeana https://pro.europeana.eu/pages/get-api
+                  Harvard   https://github.com/harvardartmuseums/api-docs
+4. Double-click run.bat. First launch installs 3 libraries (requests, pillow,
+   reportlab) - needs internet once. Afterwards it works offline except for
+   the searches themselves (they query museum APIs live, of course).
+5. Photoshop side - one command, no admin rights, works from wherever you
+   unzipped the project:
+       powershell -ExecutionPolicy Bypass -File install_uxp_no_admin.ps1
+   Restart Photoshop, then Plugins > Production Processor > Retriever.
+   (The tool's Export Board (PSD+JSX) still works the same way: File >
+   Scripts > Browse > board\load_in_photoshop.jsx, or drag board\*.jpg
+   straight into Photoshop.)
+6. The Photoshop panel remembers the folder you pick in it. It is saved on
+   the PC (in ~\production_processor_dir.txt) and used every time Photoshop
+   starts; pick another one in the panel to change it. The installer never
+   overrides a folder that is already chosen.
+
+NOT IN THE ZIP (recreated automatically)
+- cache\ thumbnails (re-downloaded as you search)
+- data\*.csv raw NGA dumps (only needed if you ever re-run nga_build.py)
+- board\dismissed.json (your per-prompt dismissal memory - copy it from the
+  old PC's board\ folder if you want to keep trained rejections)
+- Your board\ exports stay on the old PC - copy board\*.json/pdf yourself
+  if you want old sessions (brief JSONs are tiny).
+- .deps_ok and __pycache__ (machine state, not project files)
+
+OPEN IT FROM INSIDE PHOTOSHOP (no admin needed) - ONE INSTALLER
+1. Run:  powershell -ExecutionPolicy Bypass -File install_uxp_no_admin.ps1
+   It installs everything for the current user only (no UAC prompt):
+     - the UXP panel (the default front-end)
+     - the legacy JSX fallbacks into %APPDATA%\Adobe\Adobe Photoshop <version>\Presets\Scripts\
+     - the legacy CEP panel into %APPDATA%\Adobe\CEP\extensions\
+   and writes the shared pointer ~\production_processor_dir.txt.
+2. Restart Photoshop, then:  Plugins > Production Processor > Retriever
+   First "Open Retriever" click shows a UXP consent prompt - choose Allow.
+
+THE PLUGIN IS THE DEFAULT - THE LEGACY PATHS ARE FALLBACKS
+The UXP panel resolves this folder itself (panel choice -> shared pointer ->
+known locations), reads retriever_config.json from it and starts the tool with
+this folder's own start_hidden.vbs / run.bat. The JSX scripts and the CEP
+panel read the same pointer, so all three always point at the same tool.
+
+MANUAL INSTALL OF THE UXP PANEL (if you do not want the script)
+1. Copy uxp-plugin\* to
+     %APPDATA%\Adobe\UXP\Plugins\External\com.retriever.launcher\
+2. Add the registry entry %APPDATA%\Adobe\UXP\PluginsInfo\v1\PS.json :
+   {"plugins":[{"hostMinVersion":"24.0.0","name":"Production Processor",
+   "path":"$localPlugins\\External\\com.retriever.launcher",
+   "pluginId":"com.retriever.launcher","status":"enabled","type":"uxp",
+   "versionString":"1.0.0"}]}
+   (UTF-8, no BOM - a BOM breaks Photoshop's parser)
+3. Restart Photoshop: Plugins > Production Processor > Retriever.
+
+MANUAL INSTALL OF THE LEGACY CEP PANEL
+1. Copy cep\com.retriever.launcher to:  %APPDATA%\Adobe\CEP\extensions\
+2. In regedit (HKCU only, no admin): set PlayerDebugMode=1 under
+   HKCU\Software\Adobe\CSXS.9 through CSXS.12 (String value).
+   Or in PowerShell:  Set-ItemProperty HKCU:\Software\Adobe\CSXS.11 -Name PlayerDebugMode -Value 1
+3. Restart Photoshop: Window > Extensions (legacy) > Retriever.
+
+TROUBLESHOOTING
+- "py is not recognized" -> reinstall Python WITH the PATH checkbox.
+- Museum sites blocking a network (403/timeout): the tool says so in its
+  status bar and keeps the sources that answer. Home networks work best.
+- Tool won't start after a Python reinstall/upgrade: delete .deps_ok next to
+  run.bat and double-click run.bat again to re-check libraries.
+- NGA shows samples instead of real search -> data\nga.sqlite is missing;
+  re-copy it from this zip, or run:  py nga_build.py   (downloads ~170MB once)
