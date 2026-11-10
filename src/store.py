@@ -1,4 +1,4 @@
-"""Session save/load + board export (PDF contact sheet, PSD, Photoshop JSX)."""
+"""Session save/load + board export (PDF contact sheet, layered PSD, Photoshop JSX)."""
 import json, os, datetime
 
 def save_brief(path, brief, approved, toreview):
@@ -53,59 +53,129 @@ def export_pdf(path, brief, items, cache_dir="cache"):
     c.save()
     return path
 
-def _save_flattened_psd(im, path):
-    """Write a flattened RGB PSD.
+def _layer_name(i, it):
+    """Layer name for one board image: number, title, creator, source."""
+    parts = [(it.get("title") or "untitled").strip()[:60]]
+    for k in ("creator", "source"):
+        v = (it.get(k) or "").strip()
+        if v:
+            parts.append(v[:40])
+    return f"{i + 1:02d} " + " | ".join(parts)
+
+
+def _pack_plane(plane, w, h):
+    """PackBits-encode one channel for a PSD: a table of row lengths, then
+    the rows. A row of one repeated value (solid alpha, white background)
+    shrinks to a few bytes; any other row is stored as it is."""
+    import struct
+    lens, rows = [], []
+    for y in range(h):
+        row = plane[y * w:(y + 1) * w]
+        out = bytearray()
+        if row == row[:1] * w:
+            for i in range(0, w, 128):
+                n = min(128, w - i)
+                out += bytes([257 - n]) + row[:1] if n > 1 else b"\0" + row[:1]
+        else:
+            for i in range(0, w, 128):
+                chunk = row[i:i + 128]
+                out += bytes([len(chunk) - 1]) + chunk
+        lens.append(len(out))
+        rows.append(bytes(out))
+    return struct.pack(">H", 1) + struct.pack(f">{h}H", *lens) + b"".join(rows)
+
+
+def _save_layered_psd(sheet, layers, path):
+    """Write an RGB PSD with one layer per image.
 
     Pillow can read PSD but has no PSD writer (sheet.save(..., "PSD") raises
-    KeyError), so emit the minimal standard file directly: 26-byte header,
-    empty colour-mode/image-resources/layer sections, then one raw plane per
-    channel. Photoshop and Pillow both open it."""
+    KeyError), so emit the standard file directly. `sheet` is the flattened
+    picture (what apps without layer support show); `layers` is a list of
+    (name, left, top, RGB image), bottom layer first. Every layer has a solid
+    alpha channel. Photoshop and Pillow both open it."""
     import struct
-    rgb = im.convert("RGB")
-    w, h = rgb.size
-    data = rgb.tobytes()
-    header = struct.pack(">4sH6xHIIHH", b"8BPS", 1, 3, h, w, 8, 3)
+    w, h = sheet.size
+    records, pixels = [], []
+    for name, left, top, im in layers:
+        lw, lh = im.size
+        short = name.encode("ascii", "replace")[:31]      # legacy name
+        pascal = bytes([len(short)]) + short
+        pascal += b"\0" * (-len(pascal) % 4)
+        uni = name[:255]                                  # full Unicode name
+        luni = struct.pack(">I", len(uni)) + uni.encode("utf-16-be")
+        luni += b"\0" * (-len(luni) % 2)
+        extra = (struct.pack(">I", 0)                     # no layer mask
+                 + struct.pack(">I", 0)                   # no blending ranges
+                 + pascal
+                 + b"8BIM" + b"luni" + struct.pack(">I", len(luni)) + luni)
+        data = im.tobytes()
+        planes = [_pack_plane(pl, lw, lh) for pl in
+                  (b"\xff" * (lw * lh), data[0::3], data[1::3], data[2::3])]
+        rec = struct.pack(">iiiiH", top, left, top + lh, left + lw, 4)
+        for cid, pl in zip((-1, 0, 1, 2), planes):        # alpha, R, G, B
+            rec += struct.pack(">hI", cid, len(pl))
+        rec += b"8BIM" + b"norm" + bytes([255, 0, 0, 0])  # opaque, visible
+        rec += struct.pack(">I", len(extra)) + extra
+        records.append(rec)
+        pixels.append(planes)
+    info = struct.pack(">h", len(layers)) + b"".join(records)
+    info_len = len(info) + sum(len(p) for px in pixels for p in px)
+    pad = info_len % 2
+    flat = sheet.tobytes()
     with open(path, "wb") as f:
-        f.write(header)                    # signature/version/size/depth/mode
-        f.write(struct.pack(">I", 0))      # colour mode data
-        f.write(struct.pack(">I", 0))      # image resources
-        f.write(struct.pack(">I", 0))      # layer and mask information
-        f.write(struct.pack(">H", 0))      # compression: raw
-        f.write(data[0::3])                # red plane
-        f.write(data[1::3])                # green plane
-        f.write(data[2::3])                # blue plane
+        f.write(struct.pack(">4sH6xHIIHH", b"8BPS", 1, 3, h, w, 8, 3))
+        f.write(struct.pack(">I", 0))                     # colour mode data
+        f.write(struct.pack(">I", 0))                     # image resources
+        f.write(struct.pack(">I", 4 + info_len + pad + 4))  # layer and mask information
+        f.write(struct.pack(">I", info_len + pad))        # layer info
+        f.write(info)
+        for px in pixels:
+            for plane in px:
+                f.write(plane)
+        f.write(b"\0" * pad)
+        f.write(struct.pack(">I", 0))                     # no global layer mask
+        f.write(struct.pack(">H", 0))                     # flattened picture: raw
+        f.write(flat[0::3])                               # red plane
+        f.write(flat[1::3])                               # green plane
+        f.write(flat[2::3])                               # blue plane
 
 
 def export_psd_and_jsx(board_dir, items, cache_dir="cache"):
-    """Flattened PSD via Pillow + a JSX that loads each full image as a Photoshop layer."""
+    """Layered PSD (one layer per image, named after it) + a JSX stub."""
     from PIL import Image
     os.makedirs(board_dir, exist_ok=True)
     # pass 1: the cached full images that are actually readable (header-only
     # open, so a 100-item board never decodes 100 images at once)
-    paths = []
+    found = []
     for it in items:
         p = os.path.join(cache_dir, (it.get("id") or "img").replace("/", "_") + ".full")
         if not os.path.exists(p):
             continue
         try:
             with Image.open(p):
-                paths.append(p)
+                found.append((it, p))
         except Exception:
             pass
     psd_path = os.path.join(board_dir, "board.psd")
-    if paths:
-        # pass 2: paste one tile at a time and release it, bounding memory
-        cols = min(3, len(paths))
-        rows = (len(paths) + 2) // 3
+    if found:
+        # pass 2: one 800x600 cell per image, three across. Each image keeps
+        # its own shape inside the cell and becomes its own layer.
+        cols = min(3, len(found))
+        rows = (len(found) + 2) // 3
         sheet = Image.new("RGB", (800 * cols, 600 * rows), "white")
-        for i, p in enumerate(paths):
+        layers = [("Background", 0, 0, sheet.copy())]
+        for i, (it, p) in enumerate(found):
             try:
                 with Image.open(p) as im:
-                    tile = im.convert("RGB").resize((800, 600))
-                sheet.paste(tile, ((i % 3) * 800, (i // 3) * 600))
+                    tile = im.convert("RGB")
+                tile.thumbnail((800, 600))
+                left = (i % 3) * 800 + (800 - tile.size[0]) // 2
+                top = (i // 3) * 600 + (600 - tile.size[1]) // 2
+                sheet.paste(tile, (left, top))
+                layers.append((_layer_name(i, it), left, top, tile))
             except Exception:
                 pass
-        _save_flattened_psd(sheet, psd_path)
+        _save_layered_psd(sheet, layers, psd_path)
     jsx_lines = ['var folder = Folder.selectDialog("Choose board folder");',
                  'if (folder) { var files = folder.getFiles("*.jpg");',
                  'var doc = app.documents.add(2400, 1800, 72, "Reference Board");',
